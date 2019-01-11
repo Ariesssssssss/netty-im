@@ -1,0 +1,22 @@
+{
+  "hints": [],
+  "groups": [
+    {
+      "sourceType": "com.lautumn.im.netty.config.WebSocketProperties",
+      "name": "netty.websocket",
+      "type": "com.lautumn.im.netty.config.WebSocketProperties"
+    }
+  ],
+  "properties": [
+    {
+      "sourceType": "com.lautumn.im.netty.config.WebSocketProperties",
+      "name": "netty.websocket.path",
+      "type": "java.lang.String"
+    },
+    {
+      "sourceType": "com.lautumn.im.netty.config.WebSocketProperties",
+      "name": "netty.websocket.port",
+      "type": "java.lang.Integer"
+    }
+  ]
+}
