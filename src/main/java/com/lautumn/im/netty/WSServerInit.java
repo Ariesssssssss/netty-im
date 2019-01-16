@@ -1,5 +1,6 @@
 package com.lautumn.im.netty;
 
+import com.lautumn.im.netty.handler.ChatHandler;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;

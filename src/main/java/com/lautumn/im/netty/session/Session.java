@@ -14,6 +14,4 @@ import lombok.ToString;
 @ToString
 public class Session {
     private String userId;
-
-    private String username;
 }
