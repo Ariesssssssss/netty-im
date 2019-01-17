@@ -1,6 +1,5 @@
 package com.lautumn.im.netty.attribute;
 
-import com.lautumn.im.netty.session.Session;
 import io.netty.util.AttributeKey;
 
 /**
@@ -10,5 +9,6 @@ import io.netty.util.AttributeKey;
  */
 public interface Attributes {
 
-    AttributeKey<Session> SESSION = AttributeKey.newInstance("session");
+    // 保存用户id
+    AttributeKey<String> USERID = AttributeKey.newInstance("user");
 }

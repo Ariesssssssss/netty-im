@@ -35,11 +35,11 @@ public class WSServer {
         bootstrap = new ServerBootstrap();
         bootstrap.group(mainGroup, subGroup)
                 .channel(NioServerSocketChannel.class)
-                .childHandler(new WSServerInit(path));
+                .childHandler(new WSServerInit(getPath()));
     }
 
     public void start() {
-        future = this.bootstrap.bind(port);
+        future = this.bootstrap.bind(getPort());
         log.info("netty websocket server 启动完毕, 访问路径: ws://localhost:{}{}", port, path);
     }
 }

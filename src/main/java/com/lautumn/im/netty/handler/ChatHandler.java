@@ -1,13 +1,17 @@
 package com.lautumn.im.netty.handler;
 
+import ch.qos.logback.core.util.SystemInfo;
+import com.lautumn.im.netty.attribute.Attributes;
 import com.lautumn.im.netty.entity.ChatMsg;
 import com.lautumn.im.netty.entity.DataContent;
+import com.lautumn.im.netty.entity.ServerInfo;
 import com.lautumn.im.netty.entity.UserChannelRel;
 import com.lautumn.im.netty.enums.MsgActionEnum;
 import com.lautumn.im.netty.session.Session;
 import com.lautumn.im.util.IDUtil;
 import com.lautumn.im.util.JsonUtils;
 import com.lautumn.im.util.SessionUtil;
+import com.lautumn.im.util.SpringUtil;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -16,6 +20,13 @@ import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.env.Environment;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+import java.net.Inet4Address;
+import java.net.UnknownHostException;
+import java.util.Set;
 
 /**
  * @Author: Lautumn
@@ -24,6 +35,9 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public class ChatHandler extends SimpleChannelInboundHandler<TextWebSocketFrame> {
+
+
+    private static final String USER_PREFIX = "user:";
 
     /**
      * 用于记录和管理所有客户端的channel
@@ -61,7 +75,14 @@ public class ChatHandler extends SimpleChannelInboundHandler<TextWebSocketFrame>
 
             UserChannelRel.put(senderId, currentChannel);
 
-            currentChannel.writeAndFlush(new TextWebSocketFrame(JsonUtils.objectToJson(response)));
+            ServerInfo serverInfo = getServerInfo();
+
+            // 保存用户和本机关系
+            StringRedisTemplate stringRedisTemplate = SpringUtil.getBean("stringRedisTemplate", StringRedisTemplate.class);
+            String serverInfoStr = JsonUtils.objectToJson(serverInfo);
+            stringRedisTemplate.opsForValue().set(USER_PREFIX + senderId, serverInfoStr);
+
+            writerAndFlush(currentChannel, response);
 
             log.info("用户连接: [{}]", senderId);
 
@@ -74,8 +95,7 @@ public class ChatHandler extends SimpleChannelInboundHandler<TextWebSocketFrame>
             response.setAction(MsgActionEnum.SIGNED.type);
             response.setChatMsg(chatMsg);
 
-
-            // 找到接收者,由于是集群的部署方式，现在本节点查找对应接收者的连接是否在本节点，
+            // 找到接收者,由于是集群的部署方式，先在本节点查找对应接收者的连接是否在本节点，
             // 如果不在，那么查询redis找到接收者所在节点的ip，将响应数据通过http的方式发送
             String receiverId = chatMsg.getReceiverId();
 
@@ -85,15 +105,49 @@ public class ChatHandler extends SimpleChannelInboundHandler<TextWebSocketFrame>
 
                 // 从 users里获取真正的连接
                 Channel realChannel = users.find(receiverChannel.id());
-                // 用户在应用里
-                realChannel.writeAndFlush(new TextWebSocketFrame(JsonUtils.objectToJson(response)));
+
+                writerAndFlush(realChannel, response);
                 log.info("[{}] 向 [{}] 发送消息", chatMsg.getSenderId(), chatMsg.getReceiverId());
 
             } else {
 
                 // 去redis查找
+                StringRedisTemplate stringRedisTemplate = SpringUtil.getBean("stringRedisTemplate", StringRedisTemplate.class);
+                String serverInfoJson = stringRedisTemplate.opsForValue().get(receiverId);
+                if (serverInfoJson != null && serverInfoJson.length() > 0) {
+                    ServerInfo serverInfo = JsonUtils.jsonToPojo(serverInfoJson, ServerInfo.class);
+                    // 发送http请求，将响应数据发到对应存有接收用户的channel连接的服务器上
+
+                }
 
             }
+
+        } else if (action == MsgActionEnum.PULL_FRIEND.type) {
+
+            // 从redis拉取所有用户
+            StringRedisTemplate stringRedisTemplate = SpringUtil.getBean("stringRedisTemplate", StringRedisTemplate.class);
+
+            Set<String> userIdSet = stringRedisTemplate.keys(USER_PREFIX + "*");
+
+            // 过滤自己
+            String senderId = dataContent.getChatMsg().getSenderId();
+            userIdSet.remove(USER_PREFIX + senderId);
+
+            DataContent response = new DataContent();
+            response.setAction(MsgActionEnum.PULL_FRIEND.type);
+            ChatMsg chatMsg = new ChatMsg();
+            StringBuilder userIds = new StringBuilder();
+            userIdSet.forEach(userId -> {
+
+                userIds.append(userId.substring(USER_PREFIX.length()));
+                userIds.append(",");
+            });
+            if (userIds.length() > 0){
+                String userIdStr = userIds.substring(0, userIds.length() - 1);
+                chatMsg.setMsg(userIdStr);
+            }
+            response.setChatMsg(chatMsg);
+            writerAndFlush(currentChannel, response);
 
         }
 
@@ -123,7 +177,13 @@ public class ChatHandler extends SimpleChannelInboundHandler<TextWebSocketFrame>
     public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
 //        clients.remove(ctx.channel()); ChannelGroup会自动移除，所以这行代码不需要写
         users.remove(ctx.channel());
-        log.info("用户下线");
+        String userId = ctx.channel().attr(Attributes.USERID).get();
+        if (userId != null) {
+            StringRedisTemplate stringRedisTemplate = SpringUtil.getBean("stringRedisTemplate", StringRedisTemplate.class);
+            stringRedisTemplate.delete(USER_PREFIX + userId);
+            UserChannelRel.remove(userId);
+        }
+
     }
 
     /**
@@ -139,6 +199,18 @@ public class ChatHandler extends SimpleChannelInboundHandler<TextWebSocketFrame>
         // 发生异常后关闭连接，随后从ChannelGroup中移除
         ctx.channel().close();
         users.remove(ctx.channel());
+    }
+
+    private ServerInfo getServerInfo() throws UnknownHostException {
+        Environment env = SpringUtil.getBean(Environment.class);
+        String port = env.getProperty("server.port");
+        String ip = Inet4Address.getLocalHost().getHostAddress();
+        ServerInfo serverInfo = new ServerInfo(ip, Integer.valueOf(port));
+        return serverInfo;
+    }
+
+    private void writerAndFlush(Channel channel, DataContent dataContent) {
+        channel.writeAndFlush(new TextWebSocketFrame(JsonUtils.objectToJson(dataContent)));
     }
 
 }
